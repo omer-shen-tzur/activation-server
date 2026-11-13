@@ -1,0 +1,44 @@
+# One-command demo: python scripts/demo.py
+# Always used with the project name "activation-demo" (-p activation-demo), so
+# its containers, network and volume (activation-demo_demo_pgdata) are separate
+# from the dev database in docker-compose.yml. `down -v` on this project
+# deletes only the demo volume.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?set POSTGRES_USER in .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:?set POSTGRES_DB in .env}"
+    # No host port mapping: only the server container can reach this database.
+    volumes:
+      - demo_pgdata:/var/lib/postgresql/data
+      # Same init mechanism as the dev setup (creates the test database too;
+      # unused here, harmless).
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  server:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # Loopback only: the demo is not reachable from other machines.
+      - "127.0.0.1:8000:8000"
+    # .env first, then the explicit values below, which win over it.
+    env_file: .env
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+      HOST: "0.0.0.0"
+      ENV: "development"
+      ALLOW_BACKDATING: "true"
+      RATE_LIMIT_PER_MINUTE: "100000"
+
+volumes:
+  demo_pgdata:

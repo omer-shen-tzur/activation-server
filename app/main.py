@@ -10,7 +10,7 @@ from typing import Annotated, Any
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import ValidationError
 
 from app import db, signing
@@ -85,6 +85,12 @@ async def database_unavailable(request: Request, exc: psycopg.OperationalError) 
     # The reason is logged here, never returned to the client.
     log.warning("database unavailable for %s %s: %r", request.method, request.url.path, exc)
     return JSONResponse({"status": "unavailable"}, status_code=503)
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    # The dashboard itself stays behind auth; this only points to it.
+    return RedirectResponse("/dashboard")
 
 
 @app.get("/health")

@@ -64,11 +64,11 @@ TESTS (pytest, against a real Postgres from docker compose)
 
 SCRIPTS
 - scripts/simulate.py (step 6): N devices (default 5000) over the last 30 days, about 8 invented Android phone and tablet models (os_version "Android 12" to "Android 15"), several firmware versions; ~25% resend 2-3 times, some of them on a later day; random order with a --seed option for reproducible runs; signs like a real device using the shared signing module. Generates valid, universally administered MACs (a fixed vendor prefix per model is fine). Device rule: retry on network error, 429 or 5xx with exponential backoff plus jitter; mark a device activated only after 200 or 201. Self-check from responses, valid on any database state: no device gets more than one 201, and every device ends with a 200 or 201. Prints sent, unique, new (201), already existing (devices whose first success was 200) and duplicates (200 responses); devices that already existed are reported, not a failure, so a second run with the same seed shows 0 new and proves there is no double count. Exits non-zero on failure. On an empty database (the in-process test) new must equal unique. Step 7a adds a check against /api/v1/stats (credentials from DASHBOARD_USER and DASHBOARD_PASSWORD): the change in all-time activations and in duplicates between before and after the run must equal the 201 and 200 counts. History uses a dev-only backdating header honored only when ALLOW_BACKDATING=true and ENV is not production, off by default.
-- Demo (step 9): a Python script (Windows-friendly) that starts compose, waits for /health, runs the simulator, and prints the dashboard URL.
+- Demo (step 9, done): `python scripts/demo.py` (standard library only, Windows-friendly) starts docker-compose.demo.yml as the fixed project "activation-demo" (own Postgres and volume, no DB host port, separate from the dev database), waits for /health, runs the simulator twice inside the server container with the same seed (second run must show 0 new), and prints the dashboard URL. Stop: docker compose -p activation-demo -f docker-compose.demo.yml down -v.
 
 DOCKER
 - Step 3: docker-compose.yml with the db service only: postgres:16, port bound to 127.0.0.1 only, a named volume, a pg_isready healthcheck, and an init script that creates the test database.
-- Step 9: add the app service: slim Python image, runs as a non-root user, starts after db is healthy, DATABASE_URL uses the db service name (not localhost).
+- Step 9 (done): Dockerfile (python:3.12-slim, non-root, .env excluded by .dockerignore) plus a separate docker-compose.demo.yml; the dev docker-compose.yml is unchanged. The listen address comes from the HOST env var (default 127.0.0.1; the container sets 0.0.0.0). GET / redirects to /dashboard. Dashboard label "Duplicates" is now "Repeat requests (not counted)"; API field names are unchanged. Original plan: add the app service: slim Python image, runs as a non-root user, starts after db is healthy, DATABASE_URL uses the db service name (not localhost).
 
 README
 Problem, assumptions, architecture diagram (mermaid), API with curl examples, data model, how to run (docker compose up, or local), tests, simulator, decisions and trade-offs table, security model table, and "what I would change in production" (read replicas and table partitioning, a queue in front for bursts, multiple instances, keys provisioned at the factory, TLS, monitoring and alerts, data retention).
@@ -82,7 +82,7 @@ WORK ORDER: one step per message, then STOP
 6 simulator with retries and backoff, dev-only backdating, + tests
 7a stats API + dashboard Basic auth + tests + simulator before/after check against /api/v1/stats + Android-flavored simulator data
 7b dashboard.html (GET /dashboard) with charts, behind the same Basic auth, + tests (done)
-9 app in Docker + one-command demo script
+9 app in Docker + one-command demo script (done)
 10 README completion, check that no secret is in git history, fresh-clone run following the README
 At each step: say what you did and why in 3-5 lines, list files changed, show how to verify it, and give the commit message in the form "type: summary" (feat, test, docs, chore, perf, build).
 

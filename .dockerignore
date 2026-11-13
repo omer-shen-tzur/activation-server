@@ -1,0 +1,17 @@
+# Secrets: the real env file must never end up in an image layer.
+.env
+.env.*
+!.env.example
+
+.venv
+venv
+.git
+.gitignore
+__pycache__
+*.py[cod]
+.pytest_cache
+.vscode
+.idea
+tests
+db
+docker-compose*.yml

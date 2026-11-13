@@ -14,17 +14,29 @@ default loop is already selector-based, so nothing changes there.
 
 import asyncio
 import logging
+import os
 import sys
 
 import uvicorn
+from dotenv import load_dotenv
 from starlette.types import Message, Receive, Scope, Send
 
-from app.config import ConfigError
+from app.config import ENV_FILE, ConfigError
 from app.db import DatabaseUnavailableError
 from app.main import app
 
-HOST = "127.0.0.1"  # loopback only, like the database port
+DEFAULT_HOST = "127.0.0.1"  # loopback only, like the database port
 PORT = 8000
+
+
+def listen_host() -> str:
+    """The address to listen on: the HOST env var, else loopback only.
+
+    The container sets HOST=0.0.0.0 (Docker's published port reaches the
+    container's own interface, not its loopback); the compose file then
+    publishes the port on the host's 127.0.0.1 only.
+    """
+    return os.environ.get("HOST", "").strip() or DEFAULT_HOST
 
 # Startup errors whose message already says what is wrong and what to do.
 # For these the log shows that message alone. Any other startup error keeps
@@ -72,8 +84,9 @@ async def app_with_clean_startup_errors(scope: Scope, receive: Receive, send: Se
 def main() -> int:
     # lifespan="on": a failing startup (missing setting, database down)
     # must stop the server, never be skipped.
+    load_dotenv(ENV_FILE, override=False)  # so HOST can also live in .env
     config = uvicorn.Config(
-        app_with_clean_startup_errors, host=HOST, port=PORT, lifespan="on"
+        app_with_clean_startup_errors, host=listen_host(), port=PORT, lifespan="on"
     )
     # uvicorn configures only its own loggers, when Config is created (hence
     # this order). Also show our app.* logs and psycopg's warnings, which say

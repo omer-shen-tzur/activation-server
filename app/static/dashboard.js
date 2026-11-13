@@ -76,7 +76,7 @@ function render(all, filtered) {
       labels: days,
       datasets: [
         { label: "Activated", data: filtered.daily.map((d) => d.activated), borderColor: "#1f77b4" },
-        { label: "Duplicates", data: filtered.daily.map((d) => d.duplicates), borderColor: "#ff7f0e" },
+        { label: "Repeat requests (not counted)", data: filtered.daily.map((d) => d.duplicates), borderColor: "#ff7f0e" },
       ],
     },
     options: { maintainAspectRatio: false, scales: { y: { beginAtZero: true } } },
