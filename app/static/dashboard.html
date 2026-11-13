@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Activations</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 960px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+    .filters label { display: flex; flex-direction: column; font-size: 14px; }
+    #error { color: #b00020; min-height: 1.4em; font-weight: bold; }
+    table.summary { border-collapse: collapse; margin: 8px 0 16px; }
+    table.summary th, table.summary td { border: 1px solid #ccc; padding: 4px 12px; text-align: right; }
+    table.summary th:first-child { text-align: left; }
+    .chart { position: relative; height: 300px; margin-bottom: 24px; }
+  </style>
+</head>
+<body>
+  <h1>Device activations</h1>
+
+  <div class="filters">
+    <label>From <input type="date" id="from"></label>
+    <label>To <input type="date" id="to"></label>
+    <label>Model <select id="model"></select></label>
+    <button type="button" id="apply">Apply</button>
+  </div>
+  <p id="error" role="alert"></p>
+
+  <table class="summary">
+    <thead><tr><th></th><th>Activated</th><th>Duplicates</th></tr></thead>
+    <tbody>
+      <tr><th id="range-label">In range</th><td id="range-activated">0</td><td id="range-duplicates">0</td></tr>
+      <tr><th>All time</th><td id="all-activated">0</td><td id="all-duplicates">0</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Per day</h2>
+  <div class="chart"><canvas id="chart-daily"></canvas></div>
+  <h2>Cumulative activated</h2>
+  <div class="chart"><canvas id="chart-cumulative"></canvas></div>
+  <h2>Activated per model</h2>
+  <div class="chart"><canvas id="chart-models"></canvas></div>
+
+  <!-- Chart.js is pinned to an exact version on purpose: a floating tag would let the CDN change code that runs on this page. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

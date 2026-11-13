@@ -4,6 +4,7 @@ import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import date, datetime
+from pathlib import Path
 from typing import Annotated, Any
 
 import psycopg
@@ -27,6 +28,22 @@ from app.schemas import (
 from app.stats import InvalidRange, get_stats
 
 log = logging.getLogger(__name__)
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+# Scripts only from this origin and from Chart.js's pinned CDN; no inline
+# script. Device-supplied strings (model names) reach the page through
+# /api/v1/stats, so this is a second line of defence behind textContent.
+DASHBOARD_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "base-uri 'none'; "
+    "form-action 'none'; "
+    "frame-ancestors 'none'"
+)
 
 # A real activation body is a few hundred bytes; 4 KB leaves ample room.
 MAX_BODY_BYTES = 4096
@@ -115,6 +132,29 @@ async def stats(
         return await get_stats(request.app.state.pool, now, from_, to, model)
     except InvalidRange as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+def _static_file(name: str, media_type: str) -> Response:
+    # The media type is explicit: on Windows, mimetypes can read .js as
+    # text/plain from the registry. Plain `def` routes run in a threadpool,
+    # so the small file read does not block the event loop.
+    return Response(
+        (STATIC_DIR / name).read_bytes(),
+        media_type=media_type,
+        headers={"Content-Security-Policy": DASHBOARD_CSP},
+    )
+
+
+# Explicit routes, not a mounted StaticFiles directory: a mount would serve
+# files without running the auth dependency.
+@app.get("/dashboard", dependencies=[Depends(require_dashboard_auth)], include_in_schema=False)
+def dashboard_page() -> Response:
+    return _static_file("dashboard.html", "text/html; charset=utf-8")
+
+
+@app.get("/dashboard/app.js", dependencies=[Depends(require_dashboard_auth)], include_in_schema=False)
+def dashboard_script() -> Response:
+    return _static_file("dashboard.js", "text/javascript; charset=utf-8")
 
 
 async def _read_body_limited(request: Request) -> bytes:

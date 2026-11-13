@@ -34,7 +34,7 @@ ENDPOINTS
    If the database is unavailable, return 503 so the device retries. Never a bare 500 for that case.
 2. GET /api/v1/stats?from=&to=&model= : totals (all time, today, last 7 days, in Israel days), daily series with empty days filled as 0 (activations and duplicates per day), cumulative series that starts from the all-time total BEFORE the range (not from 0), breakdown by model, and duplicates_blocked = SUM(duplicates) over the range. Default range: last 30 days. from must be <= to, and the range is capped at 366 days (422 otherwise). Nothing on the dashboard path scans the devices table.
 3. GET /health (no auth): runs SELECT 1; 200 if the database answers, 503 if not.
-4. (step 7b) GET / serves dashboard.html: KPI tiles (total, today, 7 days, duplicates blocked), daily line chart with date-range filter, duplicates per day, cumulative line, bar by model, auto-refresh every 10s, zeros (not errors) when there is no data. Render all device-supplied strings with textContent, never innerHTML.
+4. (step 7b, done) GET /dashboard serves app/static/dashboard.html and GET /dashboard/app.js serves dashboard.js, both behind the same Basic auth dependency as the stats API, as explicit routes (never a mounted StaticFiles directory, which would bypass auth). Summary numbers (range and all time), daily activated + duplicates chart, cumulative chart starting from activated_before_range, bar by model, date range and model filter, zeros (not errors) when there is no data. No auto-refresh: Apply reloads. Decisions: Chart.js is pinned to chart.js@4.4.1 from cdn.jsdelivr.net (known trade-off: the dashboard needs internet access at demo time). Both responses carry a Content-Security-Policy (default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'), so the HTML has no inline script or event handlers. Device-supplied strings are rendered with textContent and new Option() only; innerHTML, outerHTML, insertAdjacentHTML and document.write are forbidden (a test checks).
 
 CLOCK
 All code gets "now" from ONE function (a FastAPI dependency). Tests override it to place an activation at a chosen instant. The simulator's dev-only backdating (step 6) is built on the same function.
@@ -81,7 +81,7 @@ WORK ORDER: one step per message, then STOP
 5 activation endpoint protection: size limit, rate limit, per-device signature, + tests; the test helper starts signing
 6 simulator with retries and backoff, dev-only backdating, + tests
 7a stats API + dashboard Basic auth + tests + simulator before/after check against /api/v1/stats + Android-flavored simulator data
-7b dashboard.html (GET /) with charts, behind the same Basic auth, + tests
+7b dashboard.html (GET /dashboard) with charts, behind the same Basic auth, + tests (done)
 9 app in Docker + one-command demo script
 10 README completion, check that no secret is in git history, fresh-clone run following the README
 At each step: say what you did and why in 3-5 lines, list files changed, show how to verify it, and give the commit message in the form "type: summary" (feat, test, docs, chore, perf, build).
