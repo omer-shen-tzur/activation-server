@@ -64,6 +64,10 @@ def _use_test_settings() -> None:
     """
     os.environ["MASTER_SECRET"] = TEST_MASTER_SECRET
     os.environ["RATE_LIMIT_PER_MINUTE"] = "1000000"
+    # A local .env must never change test behavior: backdating is off unless
+    # a test turns it on (tests.helpers.enable_backdating).
+    os.environ["ENV"] = "development"
+    os.environ["ALLOW_BACKDATING"] = "false"
 
 
 _use_test_database()

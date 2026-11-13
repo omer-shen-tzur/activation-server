@@ -30,6 +30,8 @@ class Settings:
     # of logs and tracebacks that print the settings.
     master_secret: str = field(repr=False)
     rate_limit_per_minute: int
+    env: str  # "development" or "production"
+    allow_backdating: bool  # dev only; never true together with env == "production"
 
 
 def load_settings() -> Settings:
@@ -37,6 +39,15 @@ def load_settings() -> Settings:
     # so tests and Docker can set DATABASE_URL without editing the file.
     # A missing .env is fine: in Docker the values come from the environment.
     load_dotenv(ENV_FILE, override=False)
+    env = _env_name()
+    allow_backdating = _bool("ALLOW_BACKDATING", default=False)
+    if allow_backdating and env == "production":
+        # A fake activation time in production would corrupt the history, so
+        # refuse to start rather than quietly ignore the setting.
+        raise ConfigError(
+            "ALLOW_BACKDATING=true is not allowed when ENV=production. "
+            "Set ALLOW_BACKDATING=false (or ENV=development for local simulation)."
+        )
     return Settings(
         database_url=_required("DATABASE_URL"),
         db_pool_size=_positive_int("DB_POOL_SIZE", DEFAULT_DB_POOL_SIZE),
@@ -44,7 +55,27 @@ def load_settings() -> Settings:
         rate_limit_per_minute=_positive_int(
             "RATE_LIMIT_PER_MINUTE", DEFAULT_RATE_LIMIT_PER_MINUTE
         ),
+        env=env,
+        allow_backdating=allow_backdating,
     )
+
+
+def _env_name() -> str:
+    raw = os.environ.get("ENV", "").strip().lower()
+    if not raw:
+        return "development"
+    if raw not in ("development", "production"):
+        raise ConfigError(f"ENV must be 'development' or 'production', got {raw!r}.")
+    return raw
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw not in ("true", "false"):
+        raise ConfigError(f"{name} must be 'true' or 'false', got {raw!r}.")
+    return raw == "true"
 
 
 def _required(name: str) -> str:

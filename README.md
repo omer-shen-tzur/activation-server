@@ -159,6 +159,26 @@ A duplicate is counted under the model stored on the device row, not the model i
 | Secret exposure | All secrets from env vars. `.env` is git-ignored. Startup fails if a secret is missing. | A secret manager. |
 | Network eavesdropping | Not covered in the local setup. | TLS everywhere. |
 
+## Simulator
+
+`scripts/simulate.py` plays a fleet of devices: by default 5000 devices activating over the last 30 days, about 25% of them resending 2-3 times. It signs every request like a real device and retries with backoff on network errors, 429 and 5xx.
+
+To build history it sends the dev-only `X-Simulated-Time` header, which the server honors only when backdating is on. Start the server for the simulator with (PowerShell):
+
+```powershell
+$env:ALLOW_BACKDATING = "true"
+$env:RATE_LIMIT_PER_MINUTE = "100000"   # the default limit of 60 per minute would make 5000 devices take hours
+.venv\Scripts\python.exe -m app
+```
+
+The server refuses to start with `ALLOW_BACKDATING=true` and `ENV=production`. Turn it off again for normal runs. Then, in a second terminal:
+
+```powershell
+.venv\Scripts\python.exe -m scripts.simulate --seed 1
+```
+
+Options: `--url`, `--devices`, `--days`, `--seed`, `--concurrency`. The same seed gives the same devices and times, so a second run reports 0 new devices: that shows nothing is counted twice. The script exits 0 if the self-check passes, 1 if it fails, 2 if the setup is wrong (server unreachable, no `MASTER_SECRET`, or backdating off on the server).
+
 ## Scale
 
 The peak request rate matters, not the total device count. An activated device does not resend after a power outage. Real bursts come from a large shipment or launch day, and from the server coming back after downtime, when every waiting device retries at once. Devices should use backoff with jitter. The rollup keeps the dashboard cost flat: it reads a few rows per day and model, whatever the device count. At 100x, the changes are a queue in front of the database to absorb bursts, more app instances behind a load balancer, and partitioning. Measured numbers will come from `scripts/load_test.py` in step 8.

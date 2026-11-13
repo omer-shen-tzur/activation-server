@@ -1,7 +1,7 @@
 """FastAPI application: lifespan (settings, pool, migration, rate limiter) and routes."""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any
@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from app import db, signing
 from app.activations import record_activation
-from app.clock import utc_now
+from app.clock import activation_time
 from app.config import load_settings
 from app.ratelimit import RateLimiter
 from app.schemas import ACTIVATION_EXAMPLE, ActivationRequest, ActivationResponse
@@ -146,7 +146,11 @@ def _json_safe_errors(exc: ValidationError) -> list[dict[str, Any]]:
         },
         401: {"description": "X-Signature missing or wrong for this device_id and body."},
         413: {"description": f"Request body over {MAX_BODY_BYTES} bytes."},
-        422: {"description": "Body is not valid JSON or breaks the schema (bad MAC, unknown field, missing model)."},
+        422: {
+            "description": "Body is not valid JSON or breaks the schema (bad MAC, unknown field, "
+            "missing model), or, when backdating is on, X-Simulated-Time is naive, "
+            "unparsable or in the future."
+        },
         429: {"description": "Too many requests from this IP: retry after Retry-After seconds."},
         503: {"description": "Database unavailable: retry later."},
     },
@@ -174,17 +178,17 @@ async def activate(
         str | None,
         Header(description="Hex HMAC-SHA256 of the exact body bytes, with the device's key."),
     ] = None,
-    now: datetime = Depends(utc_now),
+    resolve_time: Callable[[], datetime] = Depends(activation_time),
 ) -> ActivationResponse:
     """Record a device boot. Idempotent: safe to retry with the same body.
 
     Checks run cheapest first, and a rejected request never touches the
-    database: body size (413), rate limit (429), validation (422), then the
-    signature (401). The signature comes last because the device key is
-    derived from the MAC inside the validated body. The body is read as raw
-    bytes, not declared as a model parameter, so the size limit runs before
-    anything is parsed and the signature is checked over the exact bytes
-    received.
+    database: body size (413), rate limit (429), validation (422, which
+    includes the dev-only X-Simulated-Time header), then the signature
+    (401). The signature comes last because the device key is derived from
+    the MAC inside the validated body. The body is read as raw bytes, not
+    declared as a model parameter, so the size limit runs before anything is
+    parsed and the signature is checked over the exact bytes received.
     """
     raw = await _read_body_limited(request)
 
@@ -192,6 +196,7 @@ async def activate(
     if retry_after is not None:
         raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry_after)})
 
+    now = resolve_time()
     body = _parse_activation(raw)
 
     if not signing.verify(request.app.state.settings.master_secret, body.device_id, raw, x_signature):

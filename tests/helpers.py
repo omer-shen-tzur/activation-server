@@ -4,6 +4,7 @@ All database access goes through the app's own pool (app.state.pool), with
 parameterized SQL only.
 """
 
+import dataclasses
 import json
 from collections.abc import AsyncIterator
 from datetime import date, datetime, timezone
@@ -50,6 +51,7 @@ async def post_activation(
     body: bytes | AsyncIterator[bytes] | None = None,
     signature: str | bytes | None | object = AUTO,
     sign_with_mac: str | None = None,
+    extra_headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     """The ONE way tests send an activation.
 
@@ -64,6 +66,7 @@ async def post_activation(
       signature=      send this X-Signature instead; None sends no header.
                       A stream is never signed automatically.
       sign_with_mac=  sign with this MAC's key instead of payload["device_id"]
+      extra_headers=  more request headers, for example X-Simulated-Time
     """
     content = body if body is not None else json.dumps(payload).encode("utf-8")
     headers: dict[str, str | bytes] = {"Content-Type": "application/json"}
@@ -77,6 +80,8 @@ async def post_activation(
                 pass  # not a valid MAC: send unsigned
     elif signature is not None:
         headers["X-Signature"] = signature
+    if extra_headers:
+        headers.update(extra_headers)
 
     return await client.post("/api/v1/activations", content=content, headers=headers)
 
@@ -88,6 +93,16 @@ def set_clock(instant: datetime) -> None:
         return instant
 
     app.dependency_overrides[utc_now] = fixed_now
+
+
+def enable_backdating() -> None:
+    """Turn on the dev-only X-Simulated-Time header for the running test app.
+
+    Replaces app.state.settings (the lifespan sets a fresh copy for every
+    test), so it cannot leak into the next test. load_settings itself would
+    not allow this combination in production; see tests/test_backdating.py.
+    """
+    app.state.settings = dataclasses.replace(app.state.settings, allow_backdating=True)
 
 
 async def get_device(device_id: str) -> dict | None:
