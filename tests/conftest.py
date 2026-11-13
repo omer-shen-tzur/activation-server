@@ -12,7 +12,7 @@ from httpx import ASGITransport
 
 from app.config import ENV_FILE
 from app.main import app
-from tests.helpers import TEST_MASTER_SECRET
+from tests.helpers import TEST_DASHBOARD_PASSWORD, TEST_DASHBOARD_USER, TEST_MASTER_SECRET
 
 
 def _db_name(url: str) -> str:
@@ -59,10 +59,12 @@ def _use_test_settings() -> None:
     """Fixed test values that win over .env (load_settings never overrides the environment).
 
     The helper signs with TEST_MASTER_SECRET, so the app must use the same
-    one. The rate limit is set so high that the concurrency tests are never
+    one; likewise the dashboard credentials the stats tests send. The rate limit is set so high that the concurrency tests are never
     throttled; the 429 test installs its own low limiter.
     """
     os.environ["MASTER_SECRET"] = TEST_MASTER_SECRET
+    os.environ["DASHBOARD_USER"] = TEST_DASHBOARD_USER
+    os.environ["DASHBOARD_PASSWORD"] = TEST_DASHBOARD_PASSWORD
     os.environ["RATE_LIMIT_PER_MINUTE"] = "1000000"
     # A local .env must never change test behavior: backdating is off unless
     # a test turns it on (tests.helpers.enable_backdating).

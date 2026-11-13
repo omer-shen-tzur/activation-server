@@ -5,7 +5,10 @@
 
 The server must be started with ALLOW_BACKDATING=true (and ENV not
 production), because the history is built with the dev-only X-Simulated-Time
-header. Exit code: 0 ok, 1 self-check failed, 2 setup problem.
+header, and the simulator must be the only traffic during the run: it also
+cross-checks the change in /api/v1/stats against its own 201 and 200 counts
+(logging in with DASHBOARD_USER / DASHBOARD_PASSWORD). Exit code: 0 ok,
+1 self-check failed or dashboard credentials missing, 2 setup problem.
 
 Two parts:
   build_plan()      what every device will send and when; fully determined by
@@ -38,6 +41,7 @@ from app.config import ENV_FILE
 from app.schemas import normalize_mac
 
 ACTIVATIONS_PATH = "/api/v1/activations"
+STATS_PATH = "/api/v1/stats"
 
 # Share of devices that resend, how many extra messages they send, and how
 # many of those come on a later day rather than minutes later.
@@ -66,14 +70,18 @@ class ModelSpec:
     firmware: tuple[str, ...]
 
 
+# Invented Android phones and tablets (no real brands). Shares sum to 1.
 MODELS = (
-    ModelSpec("X100", "00:1B:44", 0.35, ("1.0.2", "1.1.0", "1.2.3")),
-    ModelSpec("X200", "00:1C:B3", 0.25, ("2.0.0", "2.0.1", "2.1.0")),
-    ModelSpec("S10", "00:1E:C0", 0.20, ("0.9.5", "1.0.0")),
-    ModelSpec("S20", "00:25:9C", 0.12, ("1.4.0", "1.5.0", "1.5.1")),
-    ModelSpec("Z5", "00:26:BB", 0.08, ("3.0.0", "3.1.2")),
+    ModelSpec("Vexa P1", "00:1B:44", 0.20, ("1.0.2", "1.1.0", "1.2.3")),
+    ModelSpec("Vexa P1 Pro", "00:1C:B3", 0.12, ("2.0.0", "2.0.1", "2.1.0")),
+    ModelSpec("Vexa Lite", "00:1E:C0", 0.18, ("0.9.5", "1.0.0")),
+    ModelSpec("Orbix Edge 5G", "00:25:9C", 0.10, ("1.4.0", "1.5.0", "1.5.1")),
+    ModelSpec("Orbix Mini", "00:26:BB", 0.08, ("3.0.0", "3.1.2")),
+    ModelSpec("Tavo Tab 8", "00:1D:0F", 0.12, ("1.0.0", "1.0.4")),
+    ModelSpec("Tavo Tab 10", "00:21:6A", 0.12, ("2.2.0", "2.3.1")),
+    ModelSpec("Tavo Tab 10 Pro", "00:23:14", 0.08, ("4.0.0", "4.1.0")),
 )
-OS_VERSIONS = ("13.0", "14.0", "14.1")
+OS_VERSIONS = ("Android 12", "Android 13", "Android 14", "Android 15")
 REGIONS = ("IL", "US", "DE", "FR", "GB")
 
 
@@ -183,10 +191,20 @@ class Result:
     problems: list[str] = field(default_factory=list)
     setup_error: str | None = None  # set when the run was stopped at once
     elapsed_s: float = 0.0
+    # Cross-check against /api/v1/stats (only when credentials were given):
+    # how much the server's all-time totals changed during the run.
+    delta_activated: int | None = None
+    delta_duplicates: int | None = None
+    stats_problem: str | None = None  # set when those deltas do not match, or could not be read
 
     @property
     def ok(self) -> bool:
-        return self.setup_error is None and not self.problems and self.completed == self.unique
+        return (
+            self.setup_error is None
+            and not self.problems
+            and self.stats_problem is None
+            and self.completed == self.unique
+        )
 
 
 async def run_simulation(
@@ -198,6 +216,7 @@ async def run_simulation(
     progress: Callable[[int, int], None] | None = None,
     jitter: random.Random | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    dashboard_auth: tuple[str, str] | None = None,
 ) -> Result:
     """Send every device's messages and check the answers.
 
@@ -206,11 +225,24 @@ async def run_simulation(
     existed (first success was 200) are reported in `existing`, not a failure.
     Never raises for a server problem; see Result.problems and setup_error.
 
+    With dashboard_auth=(user, password) it also cross-checks the server's
+    own numbers: the all-time totals from /api/v1/stats are read before and
+    after, and their change must equal the 201 and 200 counts. That holds only
+    if nothing else talks to the server during the run.
+
     jitter times the backoff only and is unseeded by default: it must not
     change the plan. sleep is a parameter so a test can skip the waiting.
     """
     result = Result(unique=len(plan))
     jitter = jitter or random.Random()
+    auth = httpx.BasicAuth(*dashboard_auth) if dashboard_auth else None
+    before: tuple[int, int] | None = None
+    if auth is not None:
+        try:
+            before = await _read_all_time(client, auth)
+        except StatsError as exc:
+            result.setup_error = f"stats check: {exc}"
+            return result
     queue: asyncio.Queue[DevicePlan] = asyncio.Queue()
     for device in plan:
         queue.put_nowait(device)
@@ -233,7 +265,57 @@ async def run_simulation(
         for _ in range(max(1, concurrency)):
             group.create_task(worker())
     result.elapsed_s = time.monotonic() - started
+    if before is not None and auth is not None and result.setup_error is None:
+        await _cross_check_stats(client, auth, before, result)
     return result
+
+
+class StatsError(Exception):
+    """/api/v1/stats could not be read."""
+
+
+async def _read_all_time(client: httpx.AsyncClient, auth: httpx.BasicAuth) -> tuple[int, int]:
+    """The server's all-time (activated, duplicates) from /api/v1/stats."""
+    try:
+        response = await client.get(STATS_PATH, auth=auth)
+    except httpx.TransportError as exc:
+        raise StatsError(f"cannot reach {STATS_PATH}: {exc!r}") from None
+    if response.status_code == 401:
+        raise StatsError(
+            f"{STATS_PATH} answered 401: DASHBOARD_USER / DASHBOARD_PASSWORD "
+            "must match the server's"
+        )
+    if response.status_code != 200:
+        raise StatsError(f"{STATS_PATH} answered {response.status_code}: {response.text[:200]}")
+    try:
+        all_time = response.json()["all_time"]
+        return int(all_time["activated"]), int(all_time["duplicates"])
+    except (ValueError, KeyError, TypeError):
+        raise StatsError(f"{STATS_PATH} answered with an unexpected body") from None
+
+
+async def _cross_check_stats(
+    client: httpx.AsyncClient,
+    auth: httpx.BasicAuth,
+    before: tuple[int, int],
+    result: Result,
+) -> None:
+    """Compare the change in the server's totals with what the devices saw."""
+    try:
+        after = await _read_all_time(client, auth)
+    except StatsError as exc:
+        result.stats_problem = f"could not read the stats after the run: {exc}"
+        return
+    result.delta_activated = after[0] - before[0]
+    result.delta_duplicates = after[1] - before[1]
+    if (result.delta_activated, result.delta_duplicates) != (result.new, result.duplicates):
+        result.stats_problem = (
+            f"stats changed by activated {result.delta_activated:+d} and duplicates "
+            f"{result.delta_duplicates:+d}, but the devices saw {result.new} 201 replies and "
+            f"{result.duplicates} 200 replies. Any other traffic to the server during the run "
+            "(or a reply lost after the server had already counted the message) breaks this "
+            "comparison: run the simulator alone against a quiet server."
+        )
 
 
 async def _run_device(
@@ -363,9 +445,16 @@ def _print_summary(result: Result) -> None:
         f"  failures:                 {result.failures}\n"
         f"  elapsed:                  {result.elapsed_s:.1f} s"
     )
+    if result.delta_activated is not None:
+        print(
+            f"  stats activated change:   {result.delta_activated:+d} (201 replies: {result.new})\n"
+            f"  stats duplicates change:  {result.delta_duplicates:+d} (200 replies: {result.duplicates})"
+        )
 
 
-async def _amain(args: argparse.Namespace, master_secret: str) -> int:
+async def _amain(
+    args: argparse.Namespace, master_secret: str, dashboard_auth: tuple[str, str]
+) -> int:
     base_url = args.url.rstrip("/")
     async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
         try:
@@ -384,7 +473,12 @@ async def _amain(args: argparse.Namespace, master_secret: str) -> int:
                 print(f"  {done}/{total} devices", flush=True)
 
         result = await run_simulation(
-            client, plan, master_secret, concurrency=args.concurrency, progress=progress
+            client,
+            plan,
+            master_secret,
+            concurrency=args.concurrency,
+            progress=progress,
+            dashboard_auth=dashboard_auth,
         )
 
     _print_summary(result)
@@ -395,10 +489,15 @@ async def _amain(args: argparse.Namespace, master_secret: str) -> int:
         print(f"problem: {problem}", file=sys.stderr)
     if len(result.problems) > 10:
         print(f"... and {len(result.problems) - 10} more", file=sys.stderr)
+    if result.stats_problem:
+        print(f"stats cross-check failed: {result.stats_problem}", file=sys.stderr)
     if not result.ok:
         print("SELF-CHECK FAILED", file=sys.stderr)
         return 1
-    print("self-check ok: no device counted twice, every device ended with 200 or 201")
+    print(
+        "self-check ok: no device counted twice, every device ended with 200 or 201, "
+        "and the server's stats changed by exactly the 201 and 200 counts"
+    )
     return 0
 
 
@@ -415,7 +514,18 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    return asyncio.run(_amain(args, master_secret))
+    # The stats cross-check logs in like the dashboard does.
+    dashboard_user = os.environ.get("DASHBOARD_USER", "").strip()
+    dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "").strip()
+    if not dashboard_user or not dashboard_password:
+        print(
+            "DASHBOARD_USER and DASHBOARD_PASSWORD are not set. The simulator reads "
+            "/api/v1/stats to cross-check its counts. Copy .env.example to .env and fill "
+            "them in (same values as the server), or set them in the environment.",
+            file=sys.stderr,
+        )
+        return 1
+    return asyncio.run(_amain(args, master_secret, (dashboard_user, dashboard_password)))
 
 
 if __name__ == "__main__":

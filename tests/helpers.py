@@ -19,6 +19,10 @@ from app.signing import device_key, sign
 # conftest.py puts this in MASTER_SECRET (overriding .env), so the test
 # signatures match what the app expects.
 TEST_MASTER_SECRET = "test-master-secret"
+# Same for the dashboard's HTTP Basic credentials.
+TEST_DASHBOARD_USER = "test-dashboard-user"
+TEST_DASHBOARD_PASSWORD = "test-dashboard-password"
+DASHBOARD_AUTH = (TEST_DASHBOARD_USER, TEST_DASHBOARD_PASSWORD)
 
 # Fixed instant used when a test does not care about the time.
 NOON_UTC = datetime(2026, 11, 13, 12, 0, 0, tzinfo=timezone.utc)

@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from scripts.simulate import Attempt, DevicePlan, build_plan, run_simulation
+from scripts import simulate
+from scripts.simulate import MODELS, Attempt, DevicePlan, build_plan, run_simulation
 from tests.helpers import (
+    DASHBOARD_AUTH,
     TEST_MASTER_SECRET,
     assert_invariants,
     count_devices,
@@ -33,9 +35,12 @@ def test_plan_is_valid():
     plan = build_plan(seed=5, devices=300, days=30, now=NOW)
 
     assert len({d.mac for d in plan}) == 300  # unique MACs
-    assert len({d.model for d in plan}) == 5
+    assert len({d.model for d in plan}) == len(MODELS) == 8
     resenders = 0
     for device in plan:
+        assert device.os_version is None or device.os_version in (
+            "Android 12", "Android 13", "Android 14", "Android 15"
+        )
         times = [a.at for a in device.attempts]
         assert times == sorted(set(times)), "attempts must be strictly increasing"
         assert times[0] >= NOW - timedelta(days=30)
@@ -130,24 +135,111 @@ async def test_simulator_runs_in_process_and_a_second_run_counts_nothing_new(cli
     messages = sum(len(d.attempts) for d in plan)
     assert messages > 200  # some devices resend
 
-    first = await run_simulation(client, plan, TEST_MASTER_SECRET, concurrency=20)
+    first = await run_simulation(
+        client, plan, TEST_MASTER_SECRET, concurrency=20, dashboard_auth=DASHBOARD_AUTH
+    )
 
     assert first.problems == [] and first.setup_error is None
     assert first.ok
     assert first.unique == first.new == 200
     assert first.existing == 0
     assert first.duplicates == messages - 200
+    # The stats cross-check ran and agrees with the devices' own counts.
+    assert first.stats_problem is None
+    assert (first.delta_activated, first.delta_duplicates) == (200, messages - 200)
     assert await count_devices() == 200
     await assert_invariants()
     assert len({day for day, _model in await get_rollup()}) > 1
 
     # Same seed again: every device already exists, so nothing is counted new.
-    second = await run_simulation(client, plan, TEST_MASTER_SECRET, concurrency=20)
+    second = await run_simulation(
+        client, plan, TEST_MASTER_SECRET, concurrency=20, dashboard_auth=DASHBOARD_AUTH
+    )
 
     assert second.problems == [] and second.setup_error is None
     assert second.ok
     assert second.new == 0
     assert second.existing == 200
     assert second.duplicates == messages
+    assert second.stats_problem is None
+    assert (second.delta_activated, second.delta_duplicates) == (0, messages)
     assert await count_devices() == 200
     await assert_invariants()
+
+
+def _stats_server(*, activated_after: int, stats_status: int = 200) -> httpx.MockTransport:
+    """A fake server: every activation is a 201, /api/v1/stats reports fixed numbers.
+
+    The first stats read says 0/0, the second says `activated_after` activated.
+    """
+    stats_reads = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal stats_reads
+        if request.url.path == "/api/v1/stats":
+            stats_reads += 1
+            if stats_status != 200:
+                return httpx.Response(stats_status)
+            activated = 0 if stats_reads == 1 else activated_after
+            return httpx.Response(
+                200, json={"all_time": {"activated": activated, "duplicates": 0}}
+            )
+        return httpx.Response(
+            201,
+            json={
+                "status": "activated",
+                "first_activated_at": request.headers["X-Simulated-Time"],
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+async def test_stats_cross_check_passes_when_the_numbers_match():
+    async with httpx.AsyncClient(
+        transport=_stats_server(activated_after=1), base_url="http://test"
+    ) as client:
+        result = await run_simulation(
+            client, [_device(1)], TEST_MASTER_SECRET, dashboard_auth=DASHBOARD_AUTH
+        )
+
+    assert result.stats_problem is None and result.ok
+    assert (result.delta_activated, result.delta_duplicates) == (1, 0)
+
+
+async def test_stats_cross_check_fails_clearly_on_a_mismatch():
+    """The server's totals moved by 5, but this run only got one 201."""
+    async with httpx.AsyncClient(
+        transport=_stats_server(activated_after=5), base_url="http://test"
+    ) as client:
+        result = await run_simulation(
+            client, [_device(1)], TEST_MASTER_SECRET, dashboard_auth=DASHBOARD_AUTH
+        )
+
+    assert result.delta_activated == 5
+    assert result.stats_problem is not None
+    assert "other traffic" in result.stats_problem.lower()
+    assert not result.ok
+
+
+async def test_wrong_dashboard_credentials_stop_the_run_before_sending():
+    async with httpx.AsyncClient(
+        transport=_stats_server(activated_after=0, stats_status=401), base_url="http://test"
+    ) as client:
+        result = await run_simulation(
+            client, [_device(1)], TEST_MASTER_SECRET, dashboard_auth=("nope", "nope")
+        )
+
+    assert result.setup_error is not None and "401" in result.setup_error
+    assert result.sent == 0
+    assert not result.ok
+
+
+def test_simulator_exits_1_without_dashboard_credentials(monkeypatch, capsys):
+    # Set to empty (not deleted): main() loads .env without overriding
+    # variables that already exist, so a local .env cannot fill them back in.
+    monkeypatch.setenv("DASHBOARD_USER", "")
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "")
+
+    assert simulate.main(["--devices", "1"]) == 1
+    assert "DASHBOARD_PASSWORD" in capsys.readouterr().err

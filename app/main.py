@@ -3,21 +3,28 @@
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app import db, signing
 from app.activations import record_activation
-from app.clock import activation_time
+from app.auth import require_dashboard_auth
+from app.clock import activation_time, utc_now
 from app.config import load_settings
 from app.ratelimit import RateLimiter
-from app.schemas import ACTIVATION_EXAMPLE, ActivationRequest, ActivationResponse
+from app.schemas import (
+    ACTIVATION_EXAMPLE,
+    ActivationRequest,
+    ActivationResponse,
+    StatsResponse,
+)
+from app.stats import InvalidRange, get_stats
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +76,45 @@ async def health(request: Request) -> JSONResponse:
     if await db.ping(request.app.state.pool):
         return JSONResponse({"status": "ok"})
     return JSONResponse({"status": "unavailable"}, status_code=503)
+
+
+@app.get(
+    "/api/v1/stats",
+    response_model=StatsResponse,
+    # Basic auth runs before the query parameters are validated, so a caller
+    # without credentials learns nothing, not even which dates are valid.
+    dependencies=[Depends(require_dashboard_auth)],
+    responses={
+        401: {"description": "Missing or wrong dashboard credentials."},
+        422: {"description": "Invalid date, from after to, or a range over 366 days."},
+        503: {"description": "Database unavailable."},
+    },
+)
+async def stats(
+    request: Request,
+    from_: Annotated[
+        date | None,
+        Query(alias="from", description="First day, YYYY-MM-DD, Israel time. Default: to - 29 days."),
+    ] = None,
+    to: Annotated[
+        date | None,
+        Query(description="Last day, YYYY-MM-DD, Israel time. Default: today in Israel."),
+    ] = None,
+    model: Annotated[
+        str | None,
+        Query(description="Only this model (exact match after trimming). Blank means all."),
+    ] = None,
+    now: datetime = Depends(utc_now),
+) -> StatsResponse:
+    """Activations and duplicates per Israel day, read from the daily rollup only."""
+    model = (model or "").strip() or None
+    if model is not None and "\x00" in model:
+        # Postgres text cannot hold NUL: a 422 here, not a 500 from the query.
+        raise HTTPException(422, "model must not contain a NUL character")
+    try:
+        return await get_stats(request.app.state.pool, now, from_, to, model)
+    except InvalidRange as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 async def _read_body_limited(request: Request) -> bytes:

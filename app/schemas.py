@@ -5,10 +5,10 @@ endpoint validates the raw bytes itself, see app/main.py).
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Annotated, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 # AA:BB:CC:DD:EE:FF or aa-bb-cc-dd-ee-ff (any case, one separator used
 # throughout), or 12 hex digits with no separator.
@@ -111,3 +111,37 @@ class ActivationRequest(BaseModel):
 class ActivationResponse(BaseModel):
     status: Literal["activated", "already_activated"]
     first_activated_at: datetime
+
+
+# GET /api/v1/stats. "activated" is the count of first activations;
+# "duplicates" is the count of repeat messages from known devices.
+class StatsRange(BaseModel):
+    from_: date = Field(serialization_alias="from")  # "from" is a Python keyword
+    to: date
+    model: str | None  # the model filter, or null for all models
+
+
+class DayStats(BaseModel):
+    day: date
+    activated: int
+    duplicates: int
+
+
+class ModelStats(BaseModel):
+    model: str
+    activated: int
+    duplicates: int
+
+
+class Totals(BaseModel):
+    activated: int
+    duplicates: int
+
+
+class StatsResponse(BaseModel):
+    range: StatsRange
+    daily: list[DayStats]  # one entry per day of the range, zeros included
+    totals_in_range: Totals
+    activated_before_range: int  # strictly before range.from, same model filter
+    by_model: list[ModelStats]  # for the range, ignores the model filter
+    all_time: Totals  # whole table, no filters

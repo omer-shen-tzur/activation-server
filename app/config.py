@@ -16,6 +16,9 @@ ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 DEFAULT_DB_POOL_SIZE = 10
 DEFAULT_RATE_LIMIT_PER_MINUTE = 60
+# The DASHBOARD_PASSWORD value in .env.example (a test keeps them in sync).
+# Anyone who has read the repo knows it, so production must not use it.
+DASHBOARD_PASSWORD_PLACEHOLDER = "change-me-too"
 
 
 class ConfigError(RuntimeError):
@@ -30,6 +33,9 @@ class Settings:
     # of logs and tracebacks that print the settings.
     master_secret: str = field(repr=False)
     rate_limit_per_minute: int
+    # HTTP Basic credentials for /api/v1/stats and the dashboard page.
+    dashboard_user: str
+    dashboard_password: str = field(repr=False)
     env: str  # "development" or "production"
     allow_backdating: bool  # dev only; never true together with env == "production"
 
@@ -48,6 +54,12 @@ def load_settings() -> Settings:
             "ALLOW_BACKDATING=true is not allowed when ENV=production. "
             "Set ALLOW_BACKDATING=false (or ENV=development for local simulation)."
         )
+    dashboard_password = _required("DASHBOARD_PASSWORD")
+    if env == "production" and dashboard_password == DASHBOARD_PASSWORD_PLACEHOLDER:
+        raise ConfigError(
+            "DASHBOARD_PASSWORD is still the .env.example placeholder, which is not allowed "
+            "when ENV=production. Set a real password."
+        )
     return Settings(
         database_url=_required("DATABASE_URL"),
         db_pool_size=_positive_int("DB_POOL_SIZE", DEFAULT_DB_POOL_SIZE),
@@ -55,6 +67,8 @@ def load_settings() -> Settings:
         rate_limit_per_minute=_positive_int(
             "RATE_LIMIT_PER_MINUTE", DEFAULT_RATE_LIMIT_PER_MINUTE
         ),
+        dashboard_user=_required("DASHBOARD_USER"),
+        dashboard_password=dashboard_password,
         env=env,
         allow_backdating=allow_backdating,
     )
