@@ -23,9 +23,12 @@ STARTUP_TIMEOUT_S = 10.0
 CONNECT_TIMEOUT_S = 3
 # How long the pool keeps retrying a lost connection, with exponential
 # backoff, before it drops that slot (the next request then opens a fresh
-# one). With the default of 300 s the backoff grows to minutes between
-# tries, so after an outage the app could keep failing long after the
-# database is back. 10 s keeps the gap between tries to a few seconds.
+# one). With the default of 300 s the backoff grows to minutes between tries.
+# After an outage, dead pooled connections are discarded only when requests
+# pick them up, so recovery takes a few requests. Measured on Windows with
+# Docker Desktop: 2-6 s with requests once a second (polling by hand every
+# ~40 s made it look like 40-75 s). Meanwhile requests get 503 and devices
+# retry.
 RECONNECT_TIMEOUT_S = 10.0
 # /health waits at most this long for a connection, and again for SELECT 1.
 HEALTH_TIMEOUT_S = 2.0

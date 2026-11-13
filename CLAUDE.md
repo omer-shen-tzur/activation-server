@@ -63,7 +63,6 @@ TESTS (pytest, against a real Postgres from docker compose)
 
 SCRIPTS
 - scripts/simulate.py (step 6): N devices (default 5000) over the last 30 days, 5 models, several firmware versions; ~25% resend 2-3 times, some of them on a later day; random order with a --seed option for reproducible runs; signs like a real device using the shared signing module. Generates valid, universally administered MACs (a fixed vendor prefix per model is fine). Device rule: retry on network error, 429 or 5xx with exponential backoff plus jitter; mark a device activated only after 200 or 201. Self-check from responses: the number of 201 responses must equal the number of unique devices. Prints sent vs unique vs activated and exits non-zero on mismatch. History uses a dev-only backdating header honored only when ALLOW_BACKDATING=true and ENV is not production, off by default.
-- scripts/load_test.py (step 8): async httpx, configurable concurrency, a mix of new devices and retries, a warm-up round that is not measured. Reports requests/sec, p50 and p95 latency, error count, and verifies the final count. Run with a high rate limit (we measure the server, not the limiter). Record machine and settings next to the numbers. Check whether the shared rollup row (same day and model) slows writes.
 - Demo (step 9): a Python script (Windows-friendly) that starts compose, waits for /health, runs the simulator, and prints the dashboard URL.
 
 DOCKER
@@ -71,7 +70,7 @@ DOCKER
 - Step 9: add the app service: slim Python image, runs as a non-root user, starts after db is healthy, DATABASE_URL uses the db service name (not localhost).
 
 README
-Problem, assumptions, architecture diagram (mermaid), API with curl examples, data model, how to run (docker compose up, or local), tests, simulator, load test results, decisions and trade-offs table, security model table, and "what I would change in production" (read replicas and table partitioning, a queue in front for bursts, multiple instances, keys provisioned at the factory, TLS, monitoring and alerts, data retention).
+Problem, assumptions, architecture diagram (mermaid), API with curl examples, data model, how to run (docker compose up, or local), tests, simulator, decisions and trade-offs table, security model table, and "what I would change in production" (read replicas and table partitioning, a queue in front for bursts, multiple instances, keys provisioned at the factory, TLS, monitoring and alerts, data retention).
 
 WORK ORDER: one step per message, then STOP
 1 skeleton + .gitignore + .env.example (done)
@@ -81,7 +80,6 @@ WORK ORDER: one step per message, then STOP
 5 activation endpoint protection: size limit, rate limit, per-device signature, + tests; the test helper starts signing
 6 simulator with retries and backoff, dev-only backdating, + tests
 7 stats API + dashboard + Basic auth, + tests
-8 load test and measured results
 9 app in Docker + one-command demo script
 10 README completion, check that no secret is in git history, fresh-clone run following the README
 At each step: say what you did and why in 3-5 lines, list files changed, show how to verify it, and give the commit message in the form "type: summary" (feat, test, docs, chore, perf, build).
