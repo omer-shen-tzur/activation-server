@@ -1,0 +1,22 @@
+-- Creates the database the tests use. Mounted into /docker-entrypoint-initdb.d
+-- by docker-compose.yml.
+--
+-- Postgres runs the files in that folder ONLY when it initialises an empty
+-- data directory, i.e. the first time the pgdata volume is created. Editing
+-- this file later changes nothing until the volume is recreated:
+--   docker compose down -v      (deletes ALL data, dev and test)
+--   docker compose up -d --wait db
+--
+-- It runs as POSTGRES_USER while connected to POSTGRES_DB, so the test
+-- database has the same owner and credentials as the main one. The name is
+-- fixed here (this file cannot read .env); TEST_DATABASE_URL must use it.
+--
+-- Tests truncate tables between runs, so they get their own database and
+-- never wipe dev or simulator data. Its tables are created by the app's
+-- startup migration when the tests start the app against it.
+--
+-- Plain SQL on purpose, not a .sh script: a shell script saved on Windows
+-- gets CRLF line endings and fails inside the Linux container. psql does
+-- not care about line endings.
+
+CREATE DATABASE activations_test;

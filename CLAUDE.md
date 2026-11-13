@@ -6,7 +6,8 @@ GOAL
 Build an "activation server": devices send a message when they boot. Count each device exactly once (its first-ever activation), no matter how many times it boots or retries. Show the results on a dashboard by time and other dimensions.
 
 STACK (no other dependencies without asking me)
-Python 3.11+, FastAPI, uvicorn, Pydantic v2, PostgreSQL 16 (in Docker) via psycopg 3 with an async connection pool, pytest + httpx, Chart.js from a CDN in one static HTML page served by the same app, Docker + docker compose. I work on Windows: every command and script must work there (no make, no bash-only scripts).
+Python 3.11+, FastAPI, uvicorn, Pydantic v2, python-dotenv, PostgreSQL 16 (in Docker) via psycopg 3 with an async connection pool, pytest + httpx, Chart.js from a CDN in one static HTML page served by the same app, Docker + docker compose. I work on Windows: every command and script must work there (no make, no bash-only scripts).
+On Windows the server and the tests must run on a SelectorEventLoop: psycopg's async mode does not work on the default ProactorEventLoop. `python -m app` starts the server that way.
 
 CONFIRMED AND CHOSEN
 Confirmed by the hiring manager: device_id is the device's MAC address, which is unique. Everything else below is our choice; the manager left it open.
@@ -16,6 +17,7 @@ Confirmed by the hiring manager: device_id is the device's MAC address, which is
 - Devices retry on failure, so duplicates are normal; the endpoint must be idempotent.
 - The first activation is a snapshot: a retry never overwrites model, versions, region or device_time. It only updates last_seen_at and attempt_count.
 - Dashboard aggregates by day in Asia/Jerusalem time.
+- The Asia/Jerusalem day is computed inside SQL (AT TIME ZONE 'Asia/Jerusalem'), not in Python, so no tzdata dependency is needed on Windows.
 
 DATA MODEL
 - devices: device_id TEXT PRIMARY KEY, model TEXT NOT NULL, os_version, firmware_version, region, first_activated_at TIMESTAMPTZ NOT NULL, device_reported_at TIMESTAMPTZ, last_seen_at TIMESTAMPTZ NOT NULL (all stored in UTC), attempt_count INTEGER NOT NULL CHECK (attempt_count >= 1).

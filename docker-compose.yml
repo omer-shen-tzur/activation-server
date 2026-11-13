@@ -1,0 +1,32 @@
+# Local Postgres for the activation server (step 9 adds the app service).
+# Values come from .env, which docker compose reads automatically; compose
+# refuses to start if one of them is missing.
+# POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB are applied only when the
+# pgdata volume is first created; changing them later has no effect until
+# the volume is recreated (docker compose down -v, which deletes all data).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:?set POSTGRES_USER in .env}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:?set POSTGRES_DB in .env}"
+    ports:
+      # Loopback only: the database is not reachable from other machines.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates the test database; runs only when pgdata is first created.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -h 127.0.0.1 checks over TCP. While the init scripts run, Postgres
+      # listens on its Unix socket only, so a socket check could report
+      # "healthy" before initialisation has finished.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
