@@ -21,7 +21,7 @@ def normalize_mac(value: str) -> str:
 
     Runs during validation, so the unique key, the stored value and (from
     step 5) the per-device key all see only the normalized form. Without it,
-    aa-bb-cc-dd-ee-01 and AA:BB:CC:DD:EE:01 would be counted as two devices.
+    00-1a-2b-3c-4d-01 and 00:1A:2B:3C:4D:01 would be counted as two devices.
     """
     if not _MAC_RE.fullmatch(value):
         raise ValueError(

@@ -120,7 +120,7 @@ A duplicate is counted under the model stored on the device row, not the model i
 ## Why the count is correct
 
 - `device_id` is the primary key. The database allows only one row per device.
-- The MAC is normalized to uppercase colon form before anything else uses it. Without this, the same MAC sent as `aa-bb-cc-dd-ee-01` and `AA:BB:CC:DD:EE:01` would be counted as two devices.
+- The MAC is normalized to uppercase colon form before anything else uses it. Without this, the same MAC sent as `00-1a-2b-3c-4d-01` and `00:1A:2B:3C:4D:01` would be counted as two devices.
 - `INSERT ... ON CONFLICT DO NOTHING RETURNING device_id` is one atomic statement. Exactly one concurrent request gets a row back. That request increments `activations`. The others take the duplicate branch.
 - Check-then-insert breaks under concurrency. Two requests can both see "not found", both insert, and both count. A unique key with `ON CONFLICT` has no such gap.
 - The device row and the rollup change in the same transaction, so they cannot drift apart.
