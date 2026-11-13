@@ -21,12 +21,11 @@ Firmware version, OS version and region are stored on the device row for future 
 
 ### Confirmed
 
-The hiring manager confirmed these. Everything else was left open.
+The hiring manager confirmed one thing. Everything else was left open.
 
 - Devices are identified by their MAC address, which is unique.
-- The MAC survives a factory reset, so a device is activated once in its lifetime.
 
-We assume the firmware always sends the same interface's MAC. Which interface that is stays the device team's decision.
+What follows from that is our reading, not part of the confirmation: a factory MAC survives a factory reset, so a device is activated once in its lifetime. We also assume the firmware always sends the same interface's MAC. Which interface that is stays the device team's decision.
 
 ### Chosen by us
 
