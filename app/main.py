@@ -1,21 +1,28 @@
-"""FastAPI application: lifespan (settings, pool, migration) and routes."""
+"""FastAPI application: lifespan (settings, pool, migration, rate limiter) and routes."""
 
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated, Any
 
 import psycopg
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
-from app import db
+from app import db, signing
 from app.activations import record_activation
 from app.clock import utc_now
 from app.config import load_settings
-from app.schemas import ActivationRequest, ActivationResponse
+from app.ratelimit import RateLimiter
+from app.schemas import ACTIVATION_EXAMPLE, ActivationRequest, ActivationResponse
 
 log = logging.getLogger(__name__)
+
+# A real activation body is a few hundred bytes; 4 KB leaves ample room.
+MAX_BODY_BYTES = 4096
 
 
 @asynccontextmanager
@@ -27,7 +34,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = await db.open_pool(settings.database_url, settings.db_pool_size)
     try:
         await db.apply_migrations(pool)
+        app.state.settings = settings
         app.state.pool = pool
+        # One limiter for the process, on app.state so a test can replace it.
+        app.state.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
         yield
     finally:
         await pool.close()
@@ -61,6 +71,70 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "unavailable"}, status_code=503)
 
 
+async def _read_body_limited(request: Request) -> bytes:
+    """The raw body, or 413 as soon as it is known to exceed MAX_BODY_BYTES.
+
+    A declared Content-Length over the limit is rejected before reading
+    anything. The limit is then enforced again on the bytes actually read,
+    so a missing or lying Content-Length (for example a chunked upload)
+    cannot get more than MAX_BODY_BYTES into memory.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_BODY_BYTES:
+                raise _body_too_large()
+        except ValueError:
+            pass  # not a number: the streamed count below still applies
+    chunks: list[bytes] = []
+    received = 0
+    async for chunk in request.stream():
+        received += len(chunk)
+        if received > MAX_BODY_BYTES:
+            raise _body_too_large()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _body_too_large() -> HTTPException:
+    return HTTPException(413, f"request body over {MAX_BODY_BYTES} bytes")
+
+
+def _client_ip(request: Request) -> str:
+    # The TCP peer address. X-Forwarded-For is ignored: any client can set
+    # it to a new value per request and dodge the limit.
+    return request.client.host if request.client else "unknown"
+
+
+def _parse_activation(raw: bytes) -> ActivationRequest:
+    """Validate the raw body, or raise the same 422 FastAPI would."""
+    try:
+        return ActivationRequest.model_validate_json(raw)
+    except ValidationError as exc:
+        raise RequestValidationError(_json_safe_errors(exc)) from None
+
+
+def _json_safe_errors(exc: ValidationError) -> list[dict[str, Any]]:
+    """Pydantic's errors, made JSON-serializable, with FastAPI's "body" loc prefix.
+
+    FastAPI's 422 handler JSON-encodes these errors. Two values would break
+    it and turn a bad request into a 500: ctx holds the ValueError raised by
+    a validator (normalize_mac), and for a body that is not valid JSON the
+    input is the raw bytes, which may not be valid UTF-8.
+    """
+    errors = exc.errors(include_url=False)
+    for err in errors:
+        err["loc"] = ("body", *err["loc"])
+        if isinstance(err.get("input"), bytes):
+            err["input"] = err["input"].decode("utf-8", errors="replace")
+        if "ctx" in err:
+            err["ctx"] = {
+                key: str(value) if isinstance(value, Exception) else value
+                for key, value in err["ctx"].items()
+            }
+    return errors
+
+
 @app.post(
     "/api/v1/activations",
     status_code=201,
@@ -70,16 +144,59 @@ async def health(request: Request) -> JSONResponse:
             "model": ActivationResponse,
             "description": "Device already activated: counted as a duplicate only.",
         },
+        401: {"description": "X-Signature missing or wrong for this device_id and body."},
+        413: {"description": f"Request body over {MAX_BODY_BYTES} bytes."},
+        422: {"description": "Body is not valid JSON or breaks the schema (bad MAC, unknown field, missing model)."},
+        429: {"description": "Too many requests from this IP: retry after Retry-After seconds."},
         503: {"description": "Database unavailable: retry later."},
+    },
+    # The endpoint reads the raw body itself (see activate), so FastAPI does
+    # not know it has one. Describe it here so the docs and "Try it out"
+    # still show the body.
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": ActivationRequest.model_json_schema(),
+                    "example": ACTIVATION_EXAMPLE,
+                }
+            },
+        }
     },
 )
 async def activate(
-    body: ActivationRequest,
     request: Request,
     response: Response,
+    # Optional at the type level so a missing header reaches our check and
+    # gets 401, not FastAPI's 422.
+    x_signature: Annotated[
+        str | None,
+        Header(description="Hex HMAC-SHA256 of the exact body bytes, with the device's key."),
+    ] = None,
     now: datetime = Depends(utc_now),
 ) -> ActivationResponse:
-    """Record a device boot. Idempotent: safe to retry with the same body."""
+    """Record a device boot. Idempotent: safe to retry with the same body.
+
+    Checks run cheapest first, and a rejected request never touches the
+    database: body size (413), rate limit (429), validation (422), then the
+    signature (401). The signature comes last because the device key is
+    derived from the MAC inside the validated body. The body is read as raw
+    bytes, not declared as a model parameter, so the size limit runs before
+    anything is parsed and the signature is checked over the exact bytes
+    received.
+    """
+    raw = await _read_body_limited(request)
+
+    retry_after = request.app.state.rate_limiter.take(_client_ip(request))
+    if retry_after is not None:
+        raise HTTPException(429, "too many requests", headers={"Retry-After": str(retry_after)})
+
+    body = _parse_activation(raw)
+
+    if not signing.verify(request.app.state.settings.master_secret, body.device_id, raw, x_signature):
+        raise HTTPException(401, "missing or invalid X-Signature")
+
     result = await record_activation(request.app.state.pool, body, now)
     if result.new_device:
         return ActivationResponse(status="activated", first_activated_at=result.first_activated_at)

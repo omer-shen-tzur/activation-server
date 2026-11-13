@@ -7,7 +7,7 @@ the middle of a request.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 DEFAULT_DB_POOL_SIZE = 10
+DEFAULT_RATE_LIMIT_PER_MINUTE = 60
 
 
 class ConfigError(RuntimeError):
@@ -25,6 +26,10 @@ class ConfigError(RuntimeError):
 class Settings:
     database_url: str
     db_pool_size: int
+    # Root of the per-device keys (app/signing.py). repr=False keeps it out
+    # of logs and tracebacks that print the settings.
+    master_secret: str = field(repr=False)
+    rate_limit_per_minute: int
 
 
 def load_settings() -> Settings:
@@ -35,6 +40,10 @@ def load_settings() -> Settings:
     return Settings(
         database_url=_required("DATABASE_URL"),
         db_pool_size=_positive_int("DB_POOL_SIZE", DEFAULT_DB_POOL_SIZE),
+        master_secret=_required("MASTER_SECRET"),
+        rate_limit_per_minute=_positive_int(
+            "RATE_LIMIT_PER_MINUTE", DEFAULT_RATE_LIMIT_PER_MINUTE
+        ),
     )
 
 

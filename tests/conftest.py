@@ -12,6 +12,7 @@ from httpx import ASGITransport
 
 from app.config import ENV_FILE
 from app.main import app
+from tests.helpers import TEST_MASTER_SECRET
 
 
 def _db_name(url: str) -> str:
@@ -54,7 +55,19 @@ def _use_test_database() -> None:
     os.environ["DATABASE_URL"] = test_url
 
 
+def _use_test_settings() -> None:
+    """Fixed test values that win over .env (load_settings never overrides the environment).
+
+    The helper signs with TEST_MASTER_SECRET, so the app must use the same
+    one. The rate limit is set so high that the concurrency tests are never
+    throttled; the 429 test installs its own low limiter.
+    """
+    os.environ["MASTER_SECRET"] = TEST_MASTER_SECRET
+    os.environ["RATE_LIMIT_PER_MINUTE"] = "1000000"
+
+
 _use_test_database()
+_use_test_settings()
 
 
 @pytest.fixture

@@ -5,6 +5,7 @@ parameterized SQL only.
 """
 
 import json
+from collections.abc import AsyncIterator
 from datetime import date, datetime, timezone
 
 import httpx
@@ -12,6 +13,11 @@ from psycopg.rows import dict_row
 
 from app.clock import utc_now
 from app.main import app
+from app.signing import device_key, sign
+
+# conftest.py puts this in MASTER_SECRET (overriding .env), so the test
+# signatures match what the app expects.
+TEST_MASTER_SECRET = "test-master-secret"
 
 # Fixed instant used when a test does not care about the time.
 NOON_UTC = datetime(2026, 11, 13, 12, 0, 0, tzinfo=timezone.utc)
@@ -29,19 +35,50 @@ def mac_n(n: int) -> str:
     return f"00:1A:2B:00:00:{n:02X}"
 
 
-async def post_activation(client: httpx.AsyncClient, payload: dict) -> httpx.Response:
+AUTO = object()  # post_activation's default: sign like a real device
+
+
+def signature_for(mac: str, body: bytes) -> str:
+    """The X-Signature a device with this MAC sends for these exact bytes."""
+    return sign(device_key(TEST_MASTER_SECRET, mac), body)
+
+
+async def post_activation(
+    client: httpx.AsyncClient,
+    payload: dict | None = None,
+    *,
+    body: bytes | AsyncIterator[bytes] | None = None,
+    signature: str | bytes | None | object = AUTO,
+    sign_with_mac: str | None = None,
+) -> httpx.Response:
     """The ONE way tests send an activation.
 
-    The body is serialized to bytes here and sent as content=, never json=.
-    In step 5 this helper will sign these exact bytes (X-Signature), so the
-    tests themselves stay unchanged.
+    By default the payload is serialized to bytes here (sent as content=,
+    never json=) and signed over those exact bytes with the key of
+    payload["device_id"], like a real device. If device_id is missing or not
+    a valid MAC the request goes unsigned; validation rejects it first anyway.
+
+    Options for the security tests:
+      body=           send these bytes (or this async stream, which goes out
+                      chunked without Content-Length) instead of the payload
+      signature=      send this X-Signature instead; None sends no header.
+                      A stream is never signed automatically.
+      sign_with_mac=  sign with this MAC's key instead of payload["device_id"]
     """
-    body = json.dumps(payload).encode("utf-8")
-    return await client.post(
-        "/api/v1/activations",
-        content=body,
-        headers={"Content-Type": "application/json"},
-    )
+    content = body if body is not None else json.dumps(payload).encode("utf-8")
+    headers: dict[str, str | bytes] = {"Content-Type": "application/json"}
+
+    if signature is AUTO:
+        mac = sign_with_mac if sign_with_mac is not None else (payload or {}).get("device_id")
+        if isinstance(content, bytes) and isinstance(mac, str):
+            try:
+                headers["X-Signature"] = signature_for(mac, content)
+            except ValueError:
+                pass  # not a valid MAC: send unsigned
+    elif signature is not None:
+        headers["X-Signature"] = signature
+
+    return await client.post("/api/v1/activations", content=content, headers=headers)
 
 
 def set_clock(instant: datetime) -> None:

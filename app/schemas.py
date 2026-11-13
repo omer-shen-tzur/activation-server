@@ -1,6 +1,7 @@
 """Activation request and response bodies: validation and MAC normalization.
 
-A body that fails validation gets 422 from FastAPI's default handler.
+A body that fails validation gets 422 in FastAPI's usual error shape (the
+endpoint validates the raw bytes itself, see app/main.py).
 """
 
 import re
@@ -79,24 +80,24 @@ OptionalText = Annotated[str, StringConstraints(max_length=64), AfterValidator(_
 DeviceTime = Annotated[datetime, AfterValidator(_naive_as_utc)]
 
 
+# Shown in the OpenAPI docs (schema and "Try it out" body).
+ACTIVATION_EXAMPLE = {
+    "device_id": "00:1A:2B:3C:4D:5E",
+    "model": "X100",
+    "os_version": "14.1",
+    "firmware_version": "1.2.3",
+    "region": "IL",
+    "device_time": "2026-11-13T09:30:00Z",
+}
+
+
 class ActivationRequest(BaseModel):
     """What a device sends on boot. Only device_id and model are required:
     rejecting a real activation over a missing optional field would lose a count."""
 
     model_config = ConfigDict(
         extra="forbid",  # unknown fields -> 422
-        json_schema_extra={
-            "examples": [
-                {
-                    "device_id": "00:1A:2B:3C:4D:5E",
-                    "model": "X100",
-                    "os_version": "14.1",
-                    "firmware_version": "1.2.3",
-                    "region": "IL",
-                    "device_time": "2026-11-13T09:30:00Z",
-                }
-            ]
-        },
+        json_schema_extra={"examples": [ACTIVATION_EXAMPLE]},
     )
 
     device_id: MacAddress
