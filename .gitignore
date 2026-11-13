@@ -1,0 +1,32 @@
+# Virtualenvs
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test and coverage caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE folders
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets: real env file is never committed; the template is
+.env
+!.env.example
